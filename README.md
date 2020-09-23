@@ -1,2 +1,3 @@
-# education_repo
-Repository containing best practices and practices, as well as programming tips and tricks.
+## education_repo
+
+Repository that contains best known methods and practices, as well as programming tips and tricks.
