@@ -39,6 +39,10 @@ public:
     void unlock() {
         assert(is_locked.load(std::memory_order_relaxed));
 
+        if (current_thread_mutex_level == mutex_level) {
+            throw std::logic_error("unlocking order has been violated.");
+        }
+
         current_thread_mutex_level = prev_mutex_level;
         is_locked.exchange(false, std::memory_order_release);
     }
