@@ -1,3 +1,4 @@
+#include <utility>
 #include <type_traits>
 
 // TODO: implement other methods
@@ -11,7 +12,7 @@ class shared_ptr {
         T* data{nullptr};
         long ref_count{0};
 
-        ~control_block() virtual {
+        ~control_block()  {
             delete data;
         }
     };
@@ -21,19 +22,19 @@ class shared_ptr {
         Deleter deleter;
 
         ~control_block_with_custom_deleter() override {
-            delete data;
+            delete control_block::data;
         }
     };
 public:
-    using element_type = std::remove_extent<T>;
+    using element_type = std::remove_extent_t<T>;
 
     // Constructors
     constexpr shared_ptr() noexcept
-     : control_block{nullptr}
+     : cb{nullptr}
     {}
 
     constexpr shared_ptr(std::nullptr_t) noexcept
-     : control_block{nullptr}
+     : cb{nullptr}
     {}
 
     template <typename Y>
@@ -89,18 +90,18 @@ public:
 
     // Destructor
     ~shared_ptr() {
-        if (--cb->ref_count == 0) {
+        if (cb && --cb->ref_count == 0) {
             delete cb;
         }
     }
 
     // Methods
     element_type* get() const noexcept {
-        return cb->data;
+        return cb ? cb->data : nullptr;
     }
 
     long use_count() const noexcept {
-        reutn cb ? cb->ref_count : 0;
+        return cb ? cb->ref_count : 0;
     }
 private:
     control_block* cb;
