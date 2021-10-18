@@ -103,6 +103,39 @@ public:
     long use_count() const noexcept {
         return cb ? cb->ref_count : 0;
     }
+
+    void swap(shared_ptr& r) noexcept {
+        control_block* tmp = r.cb;
+        r.cb = cb;
+        cb = tmp;
+    }
+
+    void reset() noexcept {
+        shared_ptr{}.swap(*this);
+    };
+
+    template <typename Y>
+    void reset(Y* ptr) {
+        shared_ptr{ptr}.swap(*this);
+    }
+
+    template <typename Y, class Deleter>
+    void reset(Y* ptr, Deleter deleter) {
+        shared_ptr{ptr, std::move(deleter)}.swap(*this);
+    }
+
+    T& operator*() const noexcept {
+        return *get();
+    }
+
+    T* operator->() const noexcept {
+        return get();
+    }
+
+    explicit operator bool() const noexcept {
+        return cb ? cb->data == nullptr : false;
+    }
+
 private:
     control_block* cb;
 };
