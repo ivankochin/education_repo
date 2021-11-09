@@ -1,3 +1,4 @@
+#include <cassert>
 #include <utility>
 #include <type_traits>
 
@@ -8,58 +9,126 @@ namespace my {
 
 template <typename T>
 class shared_ptr {
-    struct control_block {
-        T* data{nullptr};
-        long ref_count{0};
+public:
+    using element_type = std::remove_extent_t<T>;
 
-        ~control_block()  {
+private:
+
+    template <typename Y>
+    friend class shared_ptr;
+    
+    struct control_block_base {
+        virtual element_type*& get_data() noexcept = 0;
+        virtual long& get_ref_count() noexcept = 0;
+        virtual ~control_block_base() {}
+    };
+
+    class control_block : public control_block_base {
+        element_type* data;
+        long ref_count;
+    public:
+        control_block(element_type* in_data, long in_ref_count)
+         : data{in_data}
+         , ref_count{in_ref_count}
+        {}
+
+        virtual element_type*& get_data() noexcept override {
+            return data;
+        }
+
+        virtual long& get_ref_count() noexcept override {
+            return ref_count;
+        }
+
+        virtual ~control_block() {
             delete data;
         }
     };
 
-    template <typename Deleter>
-    struct control_block_with_custom_deleter : public control_block {
+    template <typename Y, typename Deleter>
+    class control_block_with_custom_deleter : public control_block_base {
+        element_type* data;
+        long ref_count;
         Deleter deleter;
+    public:
+        control_block_with_custom_deleter(Y* in_data, long in_ref_count, Deleter in_deleter)
+         : data{in_data}
+         , ref_count{in_ref_count}
+         , deleter{std::move(in_deleter)}
+        {}
+
+        virtual element_type*& get_data() noexcept override {
+            return data;
+        }
+
+        virtual long& get_ref_count() noexcept override {
+            return ref_count;
+        }
 
         ~control_block_with_custom_deleter() override {
-            delete control_block::data;
+            if(data != nullptr) {
+                deleter(data);
+            }
+        }
+    };
+
+    template<typename ControlBlock>
+    struct aliasing_control_block : public control_block_base {
+        element_type* data;
+        ControlBlock* real_block;
+    public:
+        aliasing_control_block(const ControlBlock& in_cb, element_type* in_data)
+         : data{in_data}
+         , real_block{const_cast<ControlBlock*>(&in_cb)} // TODO: think about nessesity of this const_cast
+        {}
+
+        virtual element_type*& get_data() noexcept override {
+            return data;
+        }
+
+        long& get_ref_count() noexcept override {
+            return real_block->get_ref_count();
+        }
+
+        virtual ~aliasing_control_block() override {
+            delete real_block;
         }
     };
 public:
-    using element_type = std::remove_extent_t<T>;
 
     // Constructors
-    constexpr shared_ptr() noexcept
-     : cb{nullptr}
-    {}
-
-    constexpr shared_ptr(std::nullptr_t) noexcept
-     : cb{nullptr}
-    {}
+    constexpr shared_ptr() noexcept {}
+    constexpr shared_ptr(std::nullptr_t) noexcept {}
 
     template <typename Y>
     explicit shared_ptr(Y* ptr)
      : cb{new control_block{ptr, 1}}
     {}
 
-    template <typename Y, class Deleter>
+    template <typename Y, typename Deleter>
     explicit shared_ptr(Y* ptr, Deleter deleter)
-     : cb{new control_block_with_custom_deleter{ptr, 1, std::move(deleter)}}
+     : cb{new control_block_with_custom_deleter<Y, Deleter>(ptr, 1, std::move(deleter))}
     {}
 
-    template <class Deleter>
+    template <typename Deleter>
     explicit shared_ptr(std::nullptr_t, Deleter deleter)
-     : cb{new control_block_with_custom_deleter{nullptr, 1, std::move(deleter)}}
+     : cb{new control_block_with_custom_deleter<element_type, Deleter>(nullptr, 1, std::move(deleter))}
     {}
+
+    template<typename Y>
+    shared_ptr(const shared_ptr<Y>& in_ptr, element_type* data) noexcept
+     : cb{new aliasing_control_block<typename shared_ptr<Y>::control_block_base>(*in_ptr.cb, data)}
+    {
+        in_ptr.cb->get_ref_count()++;
+    }
 
     shared_ptr(const shared_ptr& r) noexcept
      : cb{r.cb}
     {
-        cb->ref_count++;
+        cb->get_ref_count()++;
     }
 
     shared_ptr(shared_ptr&& r) noexcept
-     : cb{nullptr}
     {
         std::swap(cb, r.cb);
     }
@@ -71,13 +140,13 @@ public:
             cb = nullptr;
         }
         cb = r.cb;
-        cb->ref_count++;
+        cb->get_ref_count()++;
 
         return *this;
     }
 
     shared_ptr& operator=(shared_ptr&& r) {
-        if (cb && --cb->ref_count == 0) {
+        if (cb && --cb->get_ref_count() == 0) {
             delete cb;
         }
         cb = nullptr;
@@ -87,21 +156,24 @@ public:
         return *this;
     }
 
-
     // Destructor
     ~shared_ptr() {
-        if (cb && --cb->ref_count == 0) {
+        if (cb && --cb->get_ref_count() == 0) {
             delete cb;
         }
     }
 
     // Methods
     element_type* get() const noexcept {
-        return cb ? cb->data : nullptr;
+        return cb ? cb->get_data() : nullptr;
     }
 
     long use_count() const noexcept {
-        return cb ? cb->ref_count : 0;
+        return cb ? cb->get_ref_count() : 0;
+    }
+
+    element_type* operator->() const noexcept {
+        return get();
     }
 
     void swap(shared_ptr& r) noexcept {
@@ -137,7 +209,7 @@ public:
     }
 
 private:
-    control_block* cb;
+    control_block_base* cb{nullptr};
 };
 
 } // namespace my
