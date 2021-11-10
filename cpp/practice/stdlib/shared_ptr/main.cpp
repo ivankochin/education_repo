@@ -113,11 +113,19 @@ void test_aliasing_ctor() {
     assert(aliasing_ptr.get() == field_ptr);
 }
 
+void test_make_shared() {
+    auto ptr = my::make_shared<int>(1);
+    assert(1 == ptr.use_count());
+    assert(1 == *ptr);
+    assert(ptr);
+}
+
 int main() {
-    // test_common_functionality();
+    test_common_functionality();
     test_reset_overloads();
-    // test_custom_deleter();
-    // test_aliasing_ctor();
+    test_custom_deleter();
+    test_aliasing_ctor();
+    test_make_shared();
 
     std::cout << "Done" << std::endl;
 }
