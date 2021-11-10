@@ -2,8 +2,11 @@
 #include <utility>
 #include <type_traits>
 
-// TODO: implement other methods
-// TODO: implement std::atomic<std::shared_ptr>
+// TODO: implement allocator related stuff
+// TODO: implement non-member functions
+// TODO: implement std::atomic<my::shared_ptr>
+// TODO: implement deduction guides
+// TODO: implement weak/unique ptr
 
 namespace my {
 
@@ -172,12 +175,8 @@ public:
         return cb ? cb->get_ref_count() : 0;
     }
 
-    element_type* operator->() const noexcept {
-        return get();
-    }
-
     void swap(shared_ptr& r) noexcept {
-        control_block* tmp = r.cb;
+        control_block_base* tmp = r.cb;
         r.cb = cb;
         cb = tmp;
     }
@@ -196,16 +195,21 @@ public:
         shared_ptr{ptr, std::move(deleter)}.swap(*this);
     }
 
-    T& operator*() const noexcept {
+    element_type& operator*() const noexcept {
         return *get();
     }
 
-    T* operator->() const noexcept {
+    element_type* operator->() const noexcept {
         return get();
     }
 
+    template<typename Y = T>
+    typename std::enable_if_t<std::is_array_v<Y>, element_type&> operator[](std::size_t index) {
+        return *(get() + index);
+    }
+
     explicit operator bool() const noexcept {
-        return cb ? cb->data == nullptr : false;
+        return cb ? cb->get_data() != nullptr : false;
     }
 
 private:

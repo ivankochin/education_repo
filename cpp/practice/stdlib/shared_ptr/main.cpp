@@ -1,4 +1,5 @@
 #include <cassert>
+#include <iostream>
 #include "shared_ptr.hpp"
 
 void test_common_functionality() {
@@ -23,6 +24,42 @@ void test_common_functionality() {
     my::shared_ptr<Object> ptr3 = std::move(ptr1);
     assert(2 == ptr3.use_count());
     assert(obj_ptr == ptr3.get());
+}
+
+void test_reset_overloads() {
+    my::shared_ptr<int> ptr{};
+    assert(0 == ptr.use_count());
+    assert(nullptr == ptr.get());
+    assert(!ptr);
+
+    // Reset to new value
+    auto raw_ptr = new int(1);
+    ptr.reset(raw_ptr);
+    assert(1 == ptr.use_count());
+    assert(raw_ptr == ptr.get());
+    assert(1 == *ptr);
+    assert(ptr);
+
+    // Custom deleter case
+    bool custom_deleter_flag{false};
+    {
+        auto raw_ptr2 = new int(2);
+        ptr.reset(raw_ptr2, [&custom_deleter_flag](int* local_ptr) {
+            delete local_ptr;
+            custom_deleter_flag = true;
+        });
+        assert(1 == ptr.use_count());
+        assert(raw_ptr2 == ptr.get());
+        assert(2 == *ptr);
+        assert(ptr);
+    }
+
+    // Reset to the empty state
+    ptr.reset();
+    assert(custom_deleter_flag);
+    assert(0 == ptr.use_count());
+    assert(nullptr == ptr.get());
+    assert(!ptr);
 }
 
 void test_custom_deleter() {
@@ -77,7 +114,10 @@ void test_aliasing_ctor() {
 }
 
 int main() {
-    test_common_functionality();
-    test_custom_deleter();
-    test_aliasing_ctor();
+    // test_common_functionality();
+    test_reset_overloads();
+    // test_custom_deleter();
+    // test_aliasing_ctor();
+
+    std::cout << "Done" << std::endl;
 }
