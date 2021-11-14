@@ -3,6 +3,8 @@
 #include "shared_ptr.hpp"
 
 void test_common_functionality() {
+    std::cout << "common functionality testing" << std::endl;
+
     struct Object {};
 
     my::shared_ptr<int> empty_ptr{};
@@ -24,9 +26,13 @@ void test_common_functionality() {
     my::shared_ptr<Object> ptr3 = std::move(ptr1);
     assert(2 == ptr3.use_count());
     assert(obj_ptr == ptr3.get());
+
+    std::cout << "common functionality testing - done" << std::endl;
 }
 
 void test_reset_overloads() {
+    std::cout << "reset overloads testing" << std::endl;
+
     my::shared_ptr<int> ptr{};
     assert(0 == ptr.use_count());
     assert(nullptr == ptr.get());
@@ -60,9 +66,13 @@ void test_reset_overloads() {
     assert(0 == ptr.use_count());
     assert(nullptr == ptr.get());
     assert(!ptr);
+
+    std::cout << "reset overloads testing - done" << std::endl;
 }
 
 void test_custom_deleter() {
+    std::cout << "custom deleter testing" << std::endl;
+
     struct Object {};
 
     std::size_t deleter_call_count{0};
@@ -94,9 +104,13 @@ void test_custom_deleter() {
         assert(obj_ptr == ptr3.get());
     }
     assert(deleter_call_count = 1);
+
+    std::cout << "custom deleter testing - done" << std::endl;
 }
 
 void test_aliasing_ctor() {
+    std::cout << "aliasing ctor testing" << std::endl;
+
     struct Field {};
     struct Object {
         Field f;
@@ -111,14 +125,43 @@ void test_aliasing_ctor() {
     }
 
     assert(aliasing_ptr.get() == field_ptr);
+
+    std::cout << "aliasing ctor testing - done" << std::endl;
 }
 
 void test_make_shared() {
+    std::cout << "make_shared testing" << std::endl;
+
     auto ptr = my::make_shared<int>(1);
     assert(1 == ptr.use_count());
     assert(1 == *ptr);
     assert(ptr);
+
+    std::cout << "make_shared testing - done" << std::endl;
 }
+
+#if __THREE_WAY_COMP_PRESENT
+void test_three_way_comparison() {
+    std::cout << "Three way comparison testing" << std::endl;
+
+    my::shared_ptr<int> ptr1{new int{1}};
+    my::shared_ptr<int> ptr2{new int{2}};
+
+    assert(ptr1 <= ptr1);
+    assert(ptr1 >= ptr1);
+    assert(ptr1 == ptr1);
+    assert(ptr1 != ptr2);
+
+    assert(ptr1 < ptr2 || ptr1 > ptr2);
+
+    assert((ptr1 <=> ptr2) != 0);
+
+    assert(ptr1 != nullptr);
+    assert((ptr1 <=> nullptr) != 0);
+
+    std::cout << "Three way comparison testing - done" << std::endl;
+}
+#endif
 
 int main() {
     test_common_functionality();
@@ -126,6 +169,10 @@ int main() {
     test_custom_deleter();
     test_aliasing_ctor();
     test_make_shared();
+
+#if __THREE_WAY_COMP_PRESENT
+    test_three_way_comparison();
+#endif
 
     std::cout << "Done" << std::endl;
 }

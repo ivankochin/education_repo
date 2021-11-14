@@ -2,6 +2,11 @@
 #include <utility>
 #include <type_traits>
 
+#define __THREE_WAY_COMP_PRESENT __cplusplus >= 202002L
+#if __THREE_WAY_COMP_PRESENT
+#include <compare>
+#endif
+
 // TODO: implement allocator related stuff
 // TODO: implement non-member functions
 // TODO: implement std::atomic<my::shared_ptr>
@@ -222,3 +227,25 @@ shared_ptr<T> make_shared(Args&&... args) {
 }
 
 } // namespace my
+
+#if __THREE_WAY_COMP_PRESENT
+template<typename T>
+auto operator<=>(const my::shared_ptr<T>& lhs, const my::shared_ptr<T>& rhs) noexcept {
+    return (lhs.get() <=> rhs.get());
+}
+
+template<typename T>
+auto operator==(const my::shared_ptr<T>& lhs, const my::shared_ptr<T>& rhs) noexcept {
+    return (lhs <=> rhs) == 0;
+}
+
+template<typename T>
+auto operator<=>(const my::shared_ptr<T>& lhs, std::nullptr_t) noexcept {
+    return (lhs.get() <=> static_cast<my::shared_ptr<T>::element_type*>(nullptr));
+}
+
+template<typename T>
+auto operator==(const my::shared_ptr<T>& lhs, std::nullptr_t) noexcept {
+    return (lhs <=> nullptr) == 0;
+}
+#endif
