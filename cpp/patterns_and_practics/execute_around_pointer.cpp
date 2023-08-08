@@ -9,7 +9,7 @@ struct B {
 };
 
 template <typename T>
-struct A {
+struct execute_around {
     struct proxy {
         T* operator->() {
             std::cout << "proxy ->" << std::endl;
@@ -24,16 +24,20 @@ struct A {
     };
 
     proxy operator->() {
-        std::cout << "A ->" << std::endl;
+        std::cout << "execute_around ->" << std::endl;
         return proxy{};
     }
 };
 
 int main() {
-    A<B> a;
+    execute_around<B> b;
 
     // proxy::operator-> operator implicitly calls on each A::operator-> call 
     //   and can contain additional logic (e.g. thread safety).
+    // Note that in case of thread safety additional logic (e.g. locking the mutes on each proxy::operator->) call
+    //   you should be very careful because:
+    //     1: Locking becames implicit
+    //     2: You should access the wrapped class only through -> (taking begin() from wrapped vector and then using * operator is an error)
     // There is no way to access proxy func.
-    a->func();
+    b->func();
 }
