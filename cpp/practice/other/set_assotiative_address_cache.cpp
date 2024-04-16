@@ -4,7 +4,9 @@
 #include <cassert>
 #include <cstdlib>
 
-template <std::size_t LinesNum = 256, std::size_t LinesInSet = 4>
+enum class ReplacementPolicy = {LRU, MRU};
+
+template <ReplacementPolicy Policy = LRU, std::size_t LinesNum = 256, std::size_t LinesInSet = 4>
 class set_assotiative_cache {
     using cache_line_type = std::uint64_t;
     constexpr static std::size_t set_num = LinesNum / LinesInSet; // 64 for default configuration
@@ -21,13 +23,14 @@ class set_assotiative_cache {
         cache_line_type value;
     };
 
+    std::list<cache_line*> order{};
     std::array<cache_line, LinesNum> cache{};
 
 public:
     void push_line(uint64_t addr, cache_line_type value) {
         assert(addr % (sizeof(cache_line_type) * 8) == 0);
         addr >>= 6; // Discard offset
-        
+
         // Obtain index
         std::size_t set_start_idx = (addr % set_num) * LinesInSet;
         addr /= set_num;
