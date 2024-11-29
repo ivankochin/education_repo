@@ -18,268 +18,237 @@
 #include <list>
 
 
+// TODOs:
+// - Enable normalization layer
+// - Calculate loss accuracy for train and validation sets
+// - How to move to compile-time as many things as possible? Change vectors to array, represent layers in model as a tuple?
+// - Change design to take `batch` as input for forward_pass() and backward_pass() layer fucnctions and apply changes right inside backward()
+
 constexpr std::size_t image_height = 28;
 constexpr std::size_t image_width  = 28;
 constexpr std::size_t pixels_count = image_height * image_width;
 
-
 namespace ml {
-using node = std::vector<double>;
-using result = std::vector<double>;
-
-namespace act {
-    struct activation_func {
-        using activate_func = void (*)(result&);
-        using derivative_func = double (*)(double);
-
-        activate_func activate = nullptr;
-        derivative_func derivative = nullptr;
-    };
-
-    namespace details {
-    namespace relu {
-        void activate(result& input) {
-            for (auto& el: input) {
-                el = std::max(el, 0.0);
-            }
-        }
-
-        // Passing node activation function to derivative insted of node_output since it works with both relu and softmax
-        double derivative(double node_activation_result)  {
-            return (node_activation_result > 0) ? 1 : 0;
-        }
-    } // namespace relu
-
-    namespace sigmoid {
-        void activate(result& input) {
-            for (auto& el: input) {
-                el = expf(el) / (1 + expf(el));
-            }
-        }
-
-        // Passing node activation function to derivative insted of node_output since it works with both relu and softmax
-        double derivative(double node_activation_result) {
-            return node_activation_result * (1 - node_activation_result);
-        }
-    } // namespace relu
-
-    /*
-    // USIGN SOFTMAX AS A DERIVATIVE IS MORE COMPLICATED BECAUSE IT DEPENDS ON ALL INPUT VECTOR FOR EACH ELEMENT
-    namespace softmax {
-        void activate(result& input) {
-            double sum = 0;
-            for (auto& el: input) {
-                sum += expf(el);
-                // std::cout << "sum = " << sum << " el = " << el << " std::expf(el) = " << expf(el) << std::endl;
-            }
-
-            for (auto& el: input) {
-                el = std::exp(el) / sum;
-            }
-        }
-
-        // Passing node activation function to derivative insted of node_output since it works with both relu and softmax
-        double derivative(double node_activation_result) {
-            return 1;
-        }
-    } // namespace softmax
-    */
-
-
-
-    } // namespace details
-
-    activation_func relu = {details::relu::activate, details::relu::derivative};
-    // activation_func softmax = {details::softmax::activate, details::softmax::derivative};
-    activation_func sigmoid = {details::sigmoid::activate, details::sigmoid::derivative};
-} // namespace act
-
-namespace init {
-    void random(node& input_node) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_real_distribution<float> dist(0, 0.01);
-
-        for(auto& weight: input_node) {
-            weight = dist(gen);
-        }
-    }
-
-    // Symmetry training issue, can be used only for debugging
-    void zero(node& input_node) {
-        for(auto& weight: input_node) {
-            weight = 0;
-        }
-    }
-} // namspace init
+    using input = std::vector<double>;
 
 class layer {
 public:
-    using initialization_function = void(*)(node&);
+    using output = input;
 
-    const act::activation_func act_func;
-// private:
-    std::vector<node> data;
-    std::size_t weights_num;
-    initialization_function init_func;
-public:
-    layer(std::size_t nodes_count, std::size_t input_weights_count, act::activation_func input_act_func,
-          initialization_function init_func)
-        : data(nodes_count, node(input_weights_count + 1))
-        , weights_num(input_weights_count)
-        , act_func(input_act_func)
-    {
-        for (auto& n: data) {
-            init_func(n);
-        }
-    }
+    virtual output forward_pass(const input& input_data) const = 0;
 
-    std::size_t nodes_count() const {
-        return data.size();
-    }
+    virtual output backward_pass(const output& activations, output&& grad_output) = 0;
 
-    std::size_t weights_count() const {
-        return weights_num;
-    }
+    virtual void apply_changes() {};
+};
 
-    template <typename Input>
-    result process(const Input& input) const {
-        assertm(input.size() == weights_num, "Wrong input size");
-
-        result res(nodes_count());
-        for (int i = 0; i < nodes_count(); ++i) {
-            int j = 0;
-            for(; j < weights_num; ++j) {
-                res[i] += data[i][j] * input[j];
-            }
-            res[i] += data[i][j]; // add bias
+class normalize_layer : public layer {
+    virtual output forward_pass(const input& input_data) const override {
+        output result = input_data;
+        auto max_el   = std::max_element(std::begin(input_data), std::end(input_data));
+        for (auto& el: result) {
+            el /= *max_el;
         }
 
-        return res;
+        return result;
+    }
+
+    virtual output backward_pass(const output& activations, output&& grad_output) override {
+        output grad = std::move(grad_output);
+        return grad;
     }
 };
 
+class relu_layer : public layer {
+public:
+    virtual output forward_pass(const input& input_data) const override {
+        output result = input_data;
+        for (auto& el: result) {
+            el = std::max(0., el);
+        }
+
+        return result;
+    }
+
+    virtual output backward_pass(const output& activations, output&& grad_output) override {
+        output grad = std::move(grad_output);
+        for (std::size_t idx = 0; idx < activations.size(); ++idx) {
+            if (activations[idx] <= 0) {
+                grad[idx] = 0;
+            }
+        }
+        return grad;
+    }
+};
+
+class dense_layer : public layer {
+    using node = std::vector<double>;
+    std::vector<node> nodes, weights_change;
+    std::size_t current_batch_size;
+    double learning_rate;
+
+    std::size_t weights_num() const{
+        return nodes.front().size() - 1;
+    }
+
+public:
+    dense_layer(std::size_t input_size, std::size_t output_size, double in_learning_rate = 0.1)
+        : nodes(output_size, node(input_size + 1)) // + 1 for bias
+        , weights_change(nodes)
+        , current_batch_size(0)
+        , learning_rate(in_learning_rate)
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<float> dist(0, 0.001);
+
+        for(auto& node: nodes) {
+            for (auto& weight: node) weight = dist(gen);
+            node.back() = 0; // nullify bias
+        }
+    }
+
+    virtual output forward_pass(const input& input_data) const override {
+        output result(nodes.size());
+
+        assertm(input_data.size() == weights_num(), "Wrong input size");
+        for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+            const auto& node = nodes[node_idx];
+            for (std::size_t weight_idx = 0; weight_idx < weights_num(); ++weight_idx) {
+                result[node_idx] += node[weight_idx] * input_data[weight_idx];
+            }
+            result[node_idx] += node.back(); // add bias
+        }
+
+        return result;
+    }
+
+    virtual output backward_pass(const output& activations, output&& grad_output) override {
+        // Calculate weights change
+        ++current_batch_size;
+        for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+            for (std::size_t weight_idx = 0; weight_idx < weights_num(); ++weight_idx) {
+                weights_change[node_idx][weight_idx] += grad_output[node_idx] * activations[weight_idx];
+            }
+            weights_change[node_idx].back() += grad_output[node_idx];
+        }
+
+        // Calculate grad for prev layer
+        output grad(weights_num());
+        for (std::size_t weight_idx = 0; weight_idx < weights_num(); ++weight_idx) {
+            for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+                grad[weight_idx] += grad_output[node_idx] * nodes[node_idx][weight_idx];
+            }
+        }
+
+        return grad;
+    }
+
+    virtual void apply_changes() {
+        for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+            for (std::size_t weight_idx = 0; weight_idx < nodes[node_idx].size(); ++weight_idx) {
+                nodes[node_idx][weight_idx] -= learning_rate * weights_change[node_idx][weight_idx] / current_batch_size;
+                weights_change[node_idx][weight_idx] = 0;
+            }
+        }
+        current_batch_size = 0;
+    }
+};
+
+struct softmax_crossentropy_with_logits {
+    static double loss(const layer::output& logits, std::size_t expected) {
+        return -logits[expected] + std::log(std::accumulate(std::begin(logits), std::end(logits), 0,
+            [](auto acc, auto elem) {
+                return acc + std::exp(elem);
+            }));
+    }
+
+    static layer::output loss_grad(const layer::output& logits, std::size_t expected) {
+        layer::output result(logits.size());
+        auto exp_logits_sum = std::accumulate(std::begin(logits), std::end(logits), 0.,
+            [](auto acc, auto elem) {
+                return acc + std::exp(elem);
+            });
+
+        for (std::size_t idx = 0; idx < logits.size(); ++idx) {
+            double expected_probability = (idx == expected);
+            double softmax = std::exp(logits[idx]) / exp_logits_sum;
+
+            result[idx] = -expected_probability + softmax;
+        }
+
+        return result;
+    }
+};
+
+template<typename LossFunc>
 class model {
-    std::vector<layer> layers{};
-    layer::initialization_function init_func;
-
-    friend class layer;
+    std::vector<std::unique_ptr<layer>> layers;
 public:
-    using train_data = std::vector<std::pair<int, std::vector<int>>>;
+    using activations = std::vector<layer::output>;
+    using train_data  = std::vector<std::pair<int, input>>; // batch
 
-    model(std::size_t input_size, std::size_t nodes_count, act::activation_func act_func,
-          layer::initialization_function input_init_func)
-        : layers{}
-        , init_func(input_init_func)
-    {
-        layers.emplace_back(nodes_count, input_size, act_func, init_func);
+    void add_next_layer(std::unique_ptr<layer>&& layer_ptr) {
+        layers.emplace_back(std::move(layer_ptr));
     }
 
-    void add_next_layer(std::size_t nodes_count, act::activation_func act_func) {
-        std::size_t weights_count = layers.back().nodes_count();
+    activations forward_pass(const input& input_data) const {
+        activations result;
+        auto *input_ptr = &input_data;
 
-        layers.emplace_back(nodes_count, weights_count, act_func, init_func);
-    }
-
-    template <typename Input>
-    result predict(const Input& input) {
-        auto layer_it = std::begin(layers);
-        result processing_data = layer_it->process(input);
-        layer_it->act_func.activate(processing_data);
-        ++layer_it;
-
-        for (; layer_it != std::end(layers); ++layer_it) {
-            processing_data = layer_it->process(processing_data);
-            layer_it->act_func.activate(processing_data);
-        }
-
-        return processing_data;
-    }
-
-    void backprop(train_data& input_train_data, double learning_step = 0.01) {
-        std::vector<std::vector<node>> change_matrix{}, gradient;
         for (const auto& layer: layers) {
-            change_matrix.emplace_back(layer.nodes_count(), node(layer.weights_count() + 1));
+            result.emplace_back(layer->forward_pass(*input_ptr));
+            input_ptr = &result.back();
         }
-        gradient = change_matrix;
 
-        for (auto& [label, input]: input_train_data) {
-            std::vector<result> node_results, node_activation_results;
+        return result;
+    }
 
-            // TODO: Think how to unite forward path with predict()
-            auto layer_it = std::begin(layers);
-            node_results.emplace_back(layer_it->process(input));
-            node_activation_results.emplace_back(node_results.back());
-            layer_it->act_func.activate(node_activation_results.back());
-            ++layer_it;
+    layer::output predict(const input& input_data) const {
+        // REPORT ONLY PREDICTED RESULT
+        // activations model_result    = forward_pass(input_data);
+        // const layer::output& logits = model_result.back();
+        // auto max_logit_it           = std::max_element(std::begin(logits), std::end(logits));
+        // return std::distance(std::begin(logits), max_logit_it);
 
-            for (; layer_it != std::end(layers); ++layer_it) {
-                node_results.emplace_back(layer_it->process(node_activation_results.back()));
-                node_activation_results.emplace_back(node_results.back());
-                layer_it->act_func.activate(node_activation_results.back());
-            }
+        return forward_pass(input_data).back();
+    }
 
-            // Calculate gradient
+    void train(train_data& input_train_data) {
+        static std::random_device rd;
+        static std::mt19937 g(rd());
+        std::shuffle(std::begin(input_train_data), std::end(input_train_data), g);
+ 
+        for (auto& [label, input_data]: input_train_data) {
+            activations layer_inputs;
+            layer_inputs.emplace_back(input_data);
+
+            activations model_result = forward_pass(input_data);
+            layer_inputs.insert(
+                layer_inputs.end(),
+                std::make_move_iterator(std::begin(model_result)),
+                std::make_move_iterator(std::end(model_result))
+            );
+
+            const layer::output& logits = layer_inputs.back();
+
+            double loss = LossFunc::loss(logits, label);
+            layer::output grad = LossFunc::loss_grad(logits, label);
+
             for (int layer_idx = layers.size() - 1; layer_idx >= 0; --layer_idx) {
-                auto& layer = layers[layer_idx];
-                for (std::size_t node_idx = 0; node_idx < layer.nodes_count(); ++node_idx) {
-                    auto& gradient_vector = gradient[layer_idx][node_idx];
-                    double& gradient_bias = gradient_vector.back();
-
-                    if (layer_idx == layers.size() - 1) {
-                        // Handle last output layer
-                        // dC/dW[L,k,j] = (node_activation_results[L,j] - expected) * act_func.derivative(node_activation_results[L,j]) * node_activation_results[L - 1, j])
-                        double result   = node_activation_results[layer_idx][node_idx];
-                        double expected = (label == node_idx) ? 1.0 : 0.0;
-                        gradient_bias   = (result - expected) * layer.act_func.derivative(result);
-                        for (std::size_t weight_idx = 0; weight_idx < layer.weights_count(); ++weight_idx) {
-                            gradient_vector[weight_idx] = gradient_bias * node_activation_results[layer_idx - 1][weight_idx];
-                        }
-                    } else {
-                        // All other layers have save formula for bias
-                        // dC/db[D,c,d] = act_func.derivative(node_results[D, d]) * sum(gradient_bias[D + 1] * weight[D + 1, d])
-                        for (std::size_t next_layer_node_idx = 0; next_layer_node_idx < layers[layer_idx + 1].nodes_count(); ++next_layer_node_idx) {
-                            gradient_bias += gradient[layer_idx + 1][next_layer_node_idx].back() * layers[layer_idx + 1].data[next_layer_node_idx][node_idx];
-                        }
-                        gradient_bias *= layer.act_func.derivative(node_activation_results[layer_idx][node_idx]);
-
-                        if (layer_idx == 0) {
-                            for (std::size_t weight_idx = 0; weight_idx < layer.weights_count(); ++weight_idx) {
-                                gradient_vector[weight_idx] = gradient_bias * input[weight_idx];
-                            }
-                        } else {
-                            for (std::size_t weight_idx = 0; weight_idx < layer.weights_count(); ++weight_idx) {
-                                gradient_vector[weight_idx] = gradient_bias * node_activation_results[layer_idx - 1][weight_idx];
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (std::size_t layer_idx = 0; layer_idx < change_matrix.size(); ++layer_idx) {
-                for (std::size_t node_idx = 0; node_idx < change_matrix[layer_idx].size(); ++node_idx) {
-                    for (std::size_t weight_idx = 0; weight_idx < change_matrix[layer_idx][node_idx].size(); ++weight_idx) {
-                        change_matrix[layer_idx][node_idx][weight_idx] += gradient[layer_idx][node_idx][weight_idx];
-                    }
-                }
+                grad = layers[layer_idx]->backward_pass(layer_inputs[layer_idx], std::move(grad));
             }
         }
 
-        // Apply changes for whole batch
-        for (size_t layer_idx = 0; layer_idx < change_matrix.size(); ++layer_idx) {
-            auto& change_layer = change_matrix[layer_idx];
-            for (size_t node_idx = 0; node_idx < change_layer.size(); ++node_idx) {
-                auto& change_node = change_layer[node_idx];
-                for (size_t weight_idx = 0; weight_idx < change_node.size(); ++weight_idx) {
-                    layers[layer_idx].data[node_idx][weight_idx] -= change_node[weight_idx] * learning_step;
-                }
-            }
+        for (const auto& layer: layers) {
+            layer->apply_changes();
         }
     }
 };
+
 }
 
-constexpr std::size_t batch_size = 128;
+constexpr std::size_t batch_size = 32;
 constexpr std::size_t epochs_num = 10;
 
 int main() {
@@ -298,13 +267,22 @@ int main() {
     }
     image.write_to_file("image.png");
 
-    ml::model mnist_model(pixels_count, 16, ml::act::relu, ml::init::random);
-    mnist_model.add_next_layer(16, ml::act::relu);
-    mnist_model.add_next_layer(10, ml::act::sigmoid);
+    ml::model<ml::softmax_crossentropy_with_logits> mnist_model;
+    // mnist_model.add_next_layer(std::make_unique<ml::normalize_layer>()); // enable later
+    mnist_model.add_next_layer(std::make_unique<ml::dense_layer>(pixels_count, 100));
+    mnist_model.add_next_layer(std::make_unique<ml::relu_layer>());
+    mnist_model.add_next_layer(std::make_unique<ml::dense_layer>(100, 200));
+    mnist_model.add_next_layer(std::make_unique<ml::relu_layer>());
+    mnist_model.add_next_layer(std::make_unique<ml::dense_layer>(200, 10));
 
     std::cout << "First predict: " << std::endl;
     std::cout << "label is " << label << std::endl;
-    auto result = mnist_model.predict(image.get_data());
+    ml::input normalized;
+    for (std::size_t pixel_idx = 1; pixel_idx < first_image.size(); ++pixel_idx) {
+        normalized.emplace_back(first_image[pixel_idx] / 255.);
+    }
+    auto result = mnist_model.predict(normalized);
+    // auto result = mnist_model.predict(ml::input(std::next(std::begin(first_image)), std::end(first_image)));
     for (std::size_t i = 0; i < result.size(); ++i) {
         std::cout << " i = " << i << " probability = " << result[i] << std::endl;
     }
@@ -316,17 +294,27 @@ int main() {
     for (std::size_t epoch = 0; epoch < epochs_num; ++epoch) {
         std::cout << "Epoch #" << epoch << " training " << std::endl;
         for (std::size_t batch = 0; batch < batchs_num; ++batch) {
-            ml::model::train_data train_data_instance;
+            std::cout << "Batch #" << batch << " training " << std::endl;
+            std::vector<std::pair<int, ml::input>> train_data_instance;
+            // Why the following string causes error
+            // ml::model::train_data train_data_instance;
             for (std::size_t sample_idx = 0; sample_idx < batch_size; ++sample_idx) {
+                normalized.clear();
                 std::size_t sample_base = batch * batch_size;
                 std::vector<int> img = doc.GetRow<int>(sample_base + sample_idx);
-                train_data_instance.emplace_back(img.front(), std::vector<int>(std::next(std::begin(img)), std::end(img)));
+                for (std::size_t pixel_idx = 1; pixel_idx < img.size(); ++pixel_idx) {
+                    normalized.emplace_back(img[pixel_idx] / 255.);
+                }
+                train_data_instance.emplace_back(img.front(), normalized);
+
+                // Can be enabled if normalization layer exists
+                // train_data_instance.emplace_back(img.front(), ml::input(std::next(std::begin(img)), std::end(img)));
             }
-            mnist_model.backprop(train_data_instance);
+            mnist_model.train(train_data_instance);
 
         }
         std::cout << "Epoch #" << epoch << " prediction " << std::endl;
-        result = mnist_model.predict(image.get_data());
+        result = mnist_model.predict(ml::input(std::next(std::begin(first_image)), std::end(first_image)));
         for (std::size_t i = 0; i < result.size(); ++i) {
             std::cout << " i = " << i << " probability = " << result[i] << std::endl;
         }
